@@ -4,6 +4,41 @@ An immersive real-time interactive puzzle game where you solve puzzles using **h
 
 Built with OpenCV, MediaPipe, NumPy, and PyGame.
 
+> **Live Demo Page:** [gesture-puzzle-landing-fajnrtin.devinapps.com](https://gesture-puzzle-landing-fajnrtin.devinapps.com)
+
+---
+
+## Quick Start (One-Click Install & Play)
+
+### Windows
+1. Download or clone this repo
+2. Double-click **`install_and_play.bat`**
+3. Done — the game will install everything and launch automatically
+
+### Linux / macOS
+```bash
+git clone https://github.com/shoaibvehni/2026mayrepo.git
+cd 2026mayrepo
+chmod +x install_and_play.sh
+./install_and_play.sh
+```
+
+### Manual Setup
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Download hand tracking model (optional, for webcam gesture control)
+mkdir -p models
+curl -L -o models/hand_landmarker.task \
+  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+
+# 3. Run the game
+python run.py
+```
+
+> **Note:** A webcam is optional. Without one, the game generates a colorful sample image and uses mouse/keyboard controls.
+
 ---
 
 ## Features
@@ -53,26 +88,6 @@ Race against a 120-second timer. Bonus points for remaining time. The timer turn
 - Live camera preview during gameplay
 - Particle celebration effects on completion
 - Chaos warning countdown with flashing text
-
----
-
-## Setup
-
-### Requirements
-- Python 3.10+
-- Webcam (optional — falls back to a generated sample image)
-
-### Install
-
-```bash
-pip install -r requirements.txt
-```
-
-### Run
-
-```bash
-python run.py
-```
 
 ---
 
