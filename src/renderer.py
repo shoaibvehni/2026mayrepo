@@ -1,5 +1,9 @@
 """PyGame rendering engine for the puzzle game."""
 
+import math
+import os
+import random
+
 import cv2
 import numpy as np
 import pygame
@@ -29,6 +33,10 @@ from src.game_modes import ModeController
 from src.gesture import HandTracker
 from src.puzzle import PuzzleBoard
 from src.state import GameMode, GameState, StateManager
+
+_ASSETS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets"
+)
 
 
 class Button:
@@ -73,6 +81,17 @@ class Renderer:
 
         # Particle effects
         self._particles: list[dict] = []
+
+        # About screen state
+        self._about_tick = 0
+        self._about_orbs: list[dict] = []
+        self._dev_photo: pygame.Surface | None = None
+        self._load_dev_photo()
+
+    def reset_about_animation(self):
+        """Reset about screen animation state for fresh entrance."""
+        self._about_tick = 0
+        self._about_orbs = []
 
     def clear(self):
         self.screen.fill(COLOR_BG)
@@ -294,6 +313,186 @@ class Renderer:
         for btn in buttons:
             btn.draw(self.screen, self.hud_font)
 
+    def _load_dev_photo(self):
+        """Load developer photo from assets directory and apply circular mask."""
+        path = os.path.join(_ASSETS_DIR, "developer.png")
+        if not os.path.exists(path):
+            return
+
+        img = pygame.image.load(path)
+        mask_size = 180
+        img = pygame.transform.smoothscale(img, (mask_size, mask_size))
+
+        masked = pygame.Surface((mask_size, mask_size), pygame.SRCALPHA)
+        masked.fill((0, 0, 0, 0))
+        # Draw circular mask then blit photo through it
+        mask_surf = pygame.Surface((mask_size, mask_size), pygame.SRCALPHA)
+        mask_surf.fill((0, 0, 0, 0))
+        pygame.draw.circle(mask_surf, (255, 255, 255, 255), (mask_size // 2, mask_size // 2), mask_size // 2)
+        masked.blit(img, (0, 0))
+        # Remove pixels outside the circle
+        for y_px in range(mask_size):
+            for x_px in range(mask_size):
+                dx = x_px - mask_size // 2
+                dy = y_px - mask_size // 2
+                if dx * dx + dy * dy > (mask_size // 2) ** 2:
+                    masked.set_at((x_px, y_px), (0, 0, 0, 0))
+
+        self._dev_photo = masked
+
+    def draw_about(self, buttons: list["Button"]):
+        """Draw the About Developer screen with unique animations."""
+        self.clear()
+        self._about_tick += 1
+        t = self._about_tick
+
+        # --- Animated background: flowing gradient bars ---
+        for i in range(20):
+            offset = (t * 1.5 + i * 40) % (WINDOW_HEIGHT + 80) - 40
+            alpha_val = int(25 + 15 * math.sin(t * 0.03 + i))
+            bar_surf = pygame.Surface((WINDOW_WIDTH, 6), pygame.SRCALPHA)
+            bar_surf.fill((0, 255, 180, alpha_val))
+            self.screen.blit(bar_surf, (0, int(offset)))
+
+        # --- Floating orbs ---
+        if len(self._about_orbs) < 12:
+            self._about_orbs.append({
+                "x": random.randint(0, WINDOW_WIDTH),
+                "y": random.randint(0, WINDOW_HEIGHT),
+                "r": random.randint(15, 50),
+                "dx": random.uniform(-0.8, 0.8),
+                "dy": random.uniform(-0.5, 0.5),
+                "color": random.choice([
+                    COLOR_HIGHLIGHT, COLOR_ACCENT, COLOR_TIMER,
+                    (180, 80, 255), (255, 120, 200),
+                ]),
+                "phase": random.uniform(0, math.pi * 2),
+            })
+
+        for orb in self._about_orbs:
+            orb["x"] = (orb["x"] + orb["dx"]) % WINDOW_WIDTH
+            orb["y"] = (orb["y"] + orb["dy"]) % WINDOW_HEIGHT
+            pulse = 1.0 + 0.3 * math.sin(t * 0.05 + orb["phase"])
+            radius = int(orb["r"] * pulse)
+            orb_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+            pygame.draw.circle(orb_surf, (*orb["color"][:3], 40), (radius, radius), radius)
+            pygame.draw.circle(orb_surf, (*orb["color"][:3], 80), (radius, radius), radius // 2)
+            self.screen.blit(orb_surf, (int(orb["x"]) - radius, int(orb["y"]) - radius))
+
+        # --- Section title with glow effect ---
+        title_text = "ABOUT THE DEVELOPER"
+        glow_intensity = int(180 + 75 * math.sin(t * 0.04))
+        glow_color = (0, glow_intensity, int(glow_intensity * 0.7))
+        title_surf = self.title_font.render(title_text, True, glow_color)
+        title_rect = title_surf.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        # Glow shadow
+        glow_shadow = self.title_font.render(title_text, True, (0, 80, 60))
+        self.screen.blit(glow_shadow, (title_rect.x + 2, title_rect.y + 2))
+        self.screen.blit(title_surf, title_rect)
+
+        # --- Decorative line under title ---
+        line_w = 300 + int(50 * math.sin(t * 0.03))
+        line_x = WINDOW_WIDTH // 2 - line_w // 2
+        pygame.draw.line(self.screen, COLOR_HIGHLIGHT, (line_x, 100), (line_x + line_w, 100), 2)
+
+        # --- Developer photo with animated ring ---
+        photo_cx, photo_cy = 220, 280
+        mask_size = 180
+        if self._dev_photo is not None:
+            photo_rect = self._dev_photo.get_rect(center=(photo_cx, photo_cy))
+            self.screen.blit(self._dev_photo, photo_rect)
+
+            # Rotating ring around photo
+            ring_radius = mask_size // 2 + 12
+            for angle_i in range(36):
+                angle = math.radians(angle_i * 10 + t * 2)
+                dot_x = photo_cx + int(ring_radius * math.cos(angle))
+                dot_y = photo_cy + int(ring_radius * math.sin(angle))
+                dot_alpha = int(100 + 155 * abs(math.sin(angle + t * 0.05)))
+                dot_color = COLOR_HIGHLIGHT if angle_i % 3 == 0 else COLOR_ACCENT
+                dot_surf = pygame.Surface((8, 8), pygame.SRCALPHA)
+                pygame.draw.circle(dot_surf, (*dot_color[:3], dot_alpha), (4, 4), 4)
+                self.screen.blit(dot_surf, (dot_x - 4, dot_y - 4))
+        else:
+            # Placeholder circle if no photo
+            pygame.draw.circle(self.screen, COLOR_GRID, (photo_cx, photo_cy), 90, 3)
+            no_photo = self.hud_font.render("No Photo", True, COLOR_GRID)
+            self.screen.blit(no_photo, no_photo.get_rect(center=(photo_cx, photo_cy)))
+
+        # --- Developer info text with staggered fade-in ---
+        info_x = 400
+        info_lines = [
+            ("Shoaib Vehni", self.menu_font, COLOR_HIGHLIGHT),
+            ("Game Developer & CV Engineer", self.hud_font, COLOR_ACCENT),
+            ("", None, None),
+            ("Tech Stack:", self.hud_font, COLOR_TIMER),
+            ("Python  |  OpenCV  |  MediaPipe", self.small_font, COLOR_TEXT),
+            ("PyGame  |  NumPy  |  Hand Tracking", self.small_font, COLOR_TEXT),
+            ("", None, None),
+            ("Built with real-time computer vision", self.small_font, COLOR_ACCENT),
+            ("and gesture-based interaction design", self.small_font, COLOR_ACCENT),
+        ]
+
+        for i, (line, font, color) in enumerate(info_lines):
+            if font is None:
+                continue
+            # Staggered reveal animation: each line slides in from right
+            delay = i * 8
+            progress = min(1.0, max(0.0, (t - delay) / 30.0))
+            slide_x = int(info_x + 100 * (1.0 - progress))
+            alpha = int(255 * progress)
+
+            text_surf = font.render(line, True, color)
+            alpha_surf = pygame.Surface(text_surf.get_size(), pygame.SRCALPHA)
+            alpha_surf.blit(text_surf, (0, 0))
+            alpha_surf.set_alpha(alpha)
+            self.screen.blit(alpha_surf, (slide_x, 170 + i * 35))
+
+        # --- Animated skill bars ---
+        skills = [
+            ("Computer Vision", 0.95, COLOR_HIGHLIGHT),
+            ("Game Development", 0.88, COLOR_ACCENT),
+            ("Hand Tracking", 0.92, (180, 80, 255)),
+            ("UI/UX Design", 0.80, COLOR_TIMER),
+        ]
+
+        bar_x, bar_y_start = 100, 490
+        bar_w, bar_h = 500, 16
+        for i, (skill_name, level, color) in enumerate(skills):
+            y = bar_y_start + i * 40
+            # Fill animation
+            fill_delay = 40 + i * 15
+            fill_progress = min(1.0, max(0.0, (t - fill_delay) / 40.0))
+            fill_w = int(bar_w * level * fill_progress)
+
+            label = self.small_font.render(skill_name, True, COLOR_TEXT)
+            self.screen.blit(label, (bar_x, y - 16))
+
+            # Background bar
+            pygame.draw.rect(self.screen, COLOR_GRID, (bar_x, y, bar_w, bar_h), border_radius=4)
+            # Filled portion
+            if fill_w > 0:
+                pygame.draw.rect(self.screen, color, (bar_x, y, fill_w, bar_h), border_radius=4)
+            # Percentage
+            pct_text = self.small_font.render(f"{int(level * 100 * fill_progress)}%", True, COLOR_TEXT)
+            self.screen.blit(pct_text, (bar_x + bar_w + 12, y - 2))
+
+        # --- Buttons ---
+        for btn in buttons:
+            btn.draw(self.screen, self.hud_font)
+
+        # --- Animated corner accents ---
+        corner_len = 30 + int(10 * math.sin(t * 0.06))
+        corners = [
+            ((10, 10), (10 + corner_len, 10), (10, 10 + corner_len)),
+            ((WINDOW_WIDTH - 10, 10), (WINDOW_WIDTH - 10 - corner_len, 10), (WINDOW_WIDTH - 10, 10 + corner_len)),
+            ((10, WINDOW_HEIGHT - 10), (10 + corner_len, WINDOW_HEIGHT - 10), (10, WINDOW_HEIGHT - 10 - corner_len)),
+            ((WINDOW_WIDTH - 10, WINDOW_HEIGHT - 10), (WINDOW_WIDTH - 10 - corner_len, WINDOW_HEIGHT - 10), (WINDOW_WIDTH - 10, WINDOW_HEIGHT - 10 - corner_len)),
+        ]
+        for corner, h_end, v_end in corners:
+            pygame.draw.line(self.screen, COLOR_HIGHLIGHT, corner, h_end, 2)
+            pygame.draw.line(self.screen, COLOR_HIGHLIGHT, corner, v_end, 2)
+
     def _draw_hand_cursor(self, hand: HandTracker):
         """Draw hand cursor with trail."""
         # Trail
@@ -391,7 +590,6 @@ class Renderer:
 
     def _spawn_celebration(self):
         """Spawn particles for celebration."""
-        import random
 
         for _ in range(5):
             self._particles.append(

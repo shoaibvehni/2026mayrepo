@@ -11,6 +11,7 @@ class GameState(Enum):
     PLAYING = auto()
     PAUSED = auto()
     COMPLETED = auto()
+    ABOUT = auto()
 
 
 class GameMode(Enum):

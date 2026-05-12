@@ -87,7 +87,7 @@ class Game:
                 self.state_manager.transition(GameState.PAUSED)
             elif state == GameState.PAUSED:
                 self.state_manager.transition(GameState.PLAYING)
-            elif state in (GameState.MODE_SELECT, GameState.GRID_SELECT):
+            elif state in (GameState.MODE_SELECT, GameState.GRID_SELECT, GameState.ABOUT):
                 self.state_manager.transition(GameState.MENU)
             elif state == GameState.CAPTURING:
                 self.state_manager.transition(GameState.GRID_SELECT)
@@ -118,8 +118,15 @@ class Game:
         if state == GameState.MENU:
             if text == "Play":
                 self.state_manager.transition(GameState.MODE_SELECT)
+            elif text == "About":
+                self.renderer.reset_about_animation()
+                self.state_manager.transition(GameState.ABOUT)
             elif text == "Quit":
                 self.running = False
+
+        elif state == GameState.ABOUT:
+            if text == "Back":
+                self.state_manager.transition(GameState.MENU)
 
         elif state == GameState.MODE_SELECT:
             if text == "Classic Mode":
@@ -281,14 +288,25 @@ class Game:
             self._render_paused()
         elif state == GameState.COMPLETED:
             self._render_completed()
+        elif state == GameState.ABOUT:
+            self._render_about()
 
     def _render_menu(self):
         center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2
+        gap = BUTTON_HEIGHT + BUTTON_MARGIN
         self._buttons = [
-            Button("Play", center_x, 320),
-            Button("Quit", center_x, 320 + BUTTON_HEIGHT + BUTTON_MARGIN),
+            Button("Play", center_x, 300),
+            Button("About", center_x, 300 + gap),
+            Button("Quit", center_x, 300 + 2 * gap),
         ]
         self.renderer.draw_menu(self.state_manager, self._buttons)
+
+    def _render_about(self):
+        center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2
+        self._buttons = [
+            Button("Back", center_x, WINDOW_HEIGHT - 80),
+        ]
+        self.renderer.draw_about(self._buttons)
 
     def _render_mode_select(self):
         center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2

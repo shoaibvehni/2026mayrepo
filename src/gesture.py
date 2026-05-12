@@ -1,6 +1,7 @@
-"""Hand gesture detection using MediaPipe."""
+"""Hand gesture detection using MediaPipe Tasks API."""
 
 import math
+import os
 
 import cv2
 import mediapipe as mp
@@ -21,19 +22,46 @@ from src.config import (
     WINDOW_WIDTH,
 )
 
+# MediaPipe Tasks API imports
+BaseOptions = mp.tasks.BaseOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+RunningMode = mp.tasks.vision.RunningMode
+
+# Landmark indices (same as the old HandLandmark enum)
+WRIST = 0
+THUMB_TIP = 4
+INDEX_FINGER_TIP = 8
+INDEX_FINGER_MCP = 5
+MIDDLE_FINGER_TIP = 12
+MIDDLE_FINGER_MCP = 9
+RING_FINGER_TIP = 16
+RING_FINGER_MCP = 13
+PINKY_TIP = 20
+PINKY_MCP = 17
+
+# Model path
+_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
+    "hand_landmarker.task",
+)
+
 
 class HandTracker:
     """Tracks hand landmarks and recognizes gestures."""
 
     def __init__(self):
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=1,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.6,
-        )
-        self.mp_draw = mp.solutions.drawing_utils
+        self._landmarker = None
+        if os.path.exists(_MODEL_PATH):
+            options = HandLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=_MODEL_PATH),
+                running_mode=RunningMode.VIDEO,
+                num_hands=1,
+                min_hand_detection_confidence=0.7,
+                min_tracking_confidence=0.6,
+            )
+            self._landmarker = HandLandmarker.create_from_options(options)
 
         # Smoothed cursor position
         self._cursor_x = WINDOW_WIDTH // 2
@@ -48,8 +76,11 @@ class HandTracker:
         self._hand_detected = False
 
         # Trail for visual feedback
-        self._trail = []
+        self._trail: list[tuple[int, int]] = []
         self._max_trail = 20
+
+        # Frame timestamp counter for VIDEO mode
+        self._frame_ts = 0
 
     @property
     def cursor_pos(self) -> tuple[int, int]:
@@ -73,16 +104,24 @@ class HandTracker:
 
     def process_frame(self, frame: np.ndarray):
         """Process a camera frame and update gesture state."""
+        if self._landmarker is None:
+            self._hand_detected = False
+            self._gesture = GESTURE_NONE
+            return
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        if results.multi_hand_landmarks:
+        self._frame_ts += 33  # ~30fps in milliseconds
+        result = self._landmarker.detect_for_video(mp_image, self._frame_ts)
+
+        if result.hand_landmarks and len(result.hand_landmarks) > 0:
             self._hand_detected = True
-            hand = results.multi_hand_landmarks[0]
-            self._landmarks = hand.landmark
+            landmarks = result.hand_landmarks[0]
+            self._landmarks = landmarks
 
-            self._update_cursor(hand)
-            self._detect_gesture(hand)
+            self._update_cursor(landmarks)
+            self._detect_gesture(landmarks)
             self._update_grab_state()
 
             self._trail.append((self._cursor_x, self._cursor_y))
@@ -97,9 +136,9 @@ class HandTracker:
                 self._is_grabbing = False
             self._trail.clear()
 
-    def _update_cursor(self, hand):
+    def _update_cursor(self, landmarks):
         """Update smoothed cursor position from index finger tip."""
-        index_tip = hand.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        index_tip = landmarks[INDEX_FINGER_TIP]
 
         # Mirror X so moving hand right moves cursor right
         raw_x = int((1.0 - index_tip.x) * WINDOW_WIDTH)
@@ -113,20 +152,18 @@ class HandTracker:
             self._cursor_y * HAND_SMOOTHING + raw_y * (1 - HAND_SMOOTHING)
         )
 
-    def _detect_gesture(self, hand):
+    def _detect_gesture(self, landmarks):
         """Classify current hand gesture."""
-        landmarks = hand.landmark
+        thumb_tip = landmarks[THUMB_TIP]
+        index_tip = landmarks[INDEX_FINGER_TIP]
+        middle_tip = landmarks[MIDDLE_FINGER_TIP]
+        ring_tip = landmarks[RING_FINGER_TIP]
+        pinky_tip = landmarks[PINKY_TIP]
 
-        thumb_tip = landmarks[self.mp_hands.HandLandmark.THUMB_TIP]
-        index_tip = landmarks[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
-        middle_tip = landmarks[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
-        ring_tip = landmarks[self.mp_hands.HandLandmark.RING_FINGER_TIP]
-        pinky_tip = landmarks[self.mp_hands.HandLandmark.PINKY_TIP]
-
-        index_mcp = landmarks[self.mp_hands.HandLandmark.INDEX_FINGER_MCP]
-        middle_mcp = landmarks[self.mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
-        ring_mcp = landmarks[self.mp_hands.HandLandmark.RING_FINGER_MCP]
-        pinky_mcp = landmarks[self.mp_hands.HandLandmark.PINKY_MCP]
+        index_mcp = landmarks[INDEX_FINGER_MCP]
+        middle_mcp = landmarks[MIDDLE_FINGER_MCP]
+        ring_mcp = landmarks[RING_FINGER_MCP]
+        pinky_mcp = landmarks[PINKY_MCP]
 
         # Calculate distances
         thumb_index_dist = self._distance(thumb_tip, index_tip)
@@ -179,9 +216,8 @@ class HandTracker:
     def draw_debug(self, frame: np.ndarray) -> np.ndarray:
         """Draw hand landmarks on camera frame for debug view."""
         if self._landmarks is not None:
-            # Draw using mediapipe utility
             h, w, _ = frame.shape
-            for idx, lm in enumerate(self._landmarks):
+            for lm in self._landmarks:
                 cx, cy = int(lm.x * w), int(lm.y * h)
                 color = (0, 255, 0) if not self._is_grabbing else (0, 0, 255)
                 cv2.circle(frame, (cx, cy), 3, color, -1)
@@ -189,4 +225,5 @@ class HandTracker:
 
     def release(self):
         """Release MediaPipe resources."""
-        self.hands.close()
+        if self._landmarker is not None:
+            self._landmarker.close()
