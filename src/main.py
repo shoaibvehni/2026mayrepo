@@ -1,9 +1,7 @@
 """Main entry point for the Hand Gesture Puzzle Game."""
 
-import sys
 import time
 
-import cv2
 import numpy as np
 import pygame
 
@@ -13,7 +11,6 @@ from src.config import (
     BUTTON_WIDTH,
     COLOR_ACCENT,
     COLOR_CHAOS,
-    COLOR_HIGHLIGHT,
     COLOR_TIMER,
     GESTURE_PEACE,
     WINDOW_HEIGHT,
@@ -21,6 +18,7 @@ from src.config import (
 )
 from src.game_modes import ModeController
 from src.gesture import HandTracker
+from src.leaderboard import save_entry
 from src.puzzle import PuzzleBoard
 from src.renderer import Button, Renderer
 from src.state import GameMode, GameState, StateManager
@@ -53,6 +51,11 @@ class Game:
         # Grab state tracking
         self._was_grabbing = False
 
+        # Completion screen state
+        self._player_name = ""
+        self._name_input_active = True
+        self._score_saved = False
+
         self.running = True
 
     def run(self):
@@ -73,14 +76,31 @@ class Game:
                 return
 
             if event.type == pygame.KEYDOWN:
-                self._handle_key(event.key)
+                self._handle_key(event)
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 self._handle_click(event.pos)
 
-    def _handle_key(self, key: int):
+    def _handle_key(self, event: pygame.event.Event):
         """Handle keyboard input."""
         state = self.state_manager.state
+        key = event.key
+
+        # Handle text input for completion screen
+        if state == GameState.COMPLETED and self._name_input_active:
+            if key == pygame.K_RETURN:
+                self._submit_score()
+                return
+            elif key == pygame.K_BACKSPACE:
+                self._player_name = self._player_name[:-1]
+                return
+            elif key == pygame.K_ESCAPE:
+                self._name_input_active = False
+                return
+            else:
+                if event.unicode and event.unicode.isprintable() and len(self._player_name) < 20:
+                    self._player_name += event.unicode
+                return
 
         if key == pygame.K_ESCAPE:
             if state == GameState.PLAYING:
@@ -91,6 +111,8 @@ class Game:
                 self.state_manager.transition(GameState.MENU)
             elif state == GameState.CAPTURING:
                 self.state_manager.transition(GameState.GRID_SELECT)
+            elif state == GameState.LEADERBOARD:
+                self.state_manager.transition(GameState.MENU)
 
         elif key == pygame.K_SPACE:
             if state == GameState.CAPTURING:
@@ -106,6 +128,29 @@ class Game:
 
     def _handle_click(self, pos: tuple[int, int]):
         """Handle mouse clicks on buttons."""
+        state = self.state_manager.state
+
+        # Check leaderboard button click during gameplay
+        if state == GameState.PLAYING:
+            if 10 <= pos[0] <= 150 and 10 <= pos[1] <= 42:
+                self.state_manager.transition(GameState.LEADERBOARD)
+                return
+
+        # Check submit arrow button on completion screen
+        if state == GameState.COMPLETED and self._name_input_active:
+            input_w = 300
+            input_x = WINDOW_WIDTH // 2 - input_w // 2
+            arrow_x = input_x + input_w + 10
+            arrow_y = 380
+            if arrow_x <= pos[0] <= arrow_x + 50 and arrow_y <= pos[1] <= arrow_y + 50:
+                self._submit_score()
+                return
+
+            # Click on input field to activate
+            if input_x <= pos[0] <= input_x + input_w and 380 <= pos[1] <= 430:
+                self._name_input_active = True
+                return
+
         for btn in self._buttons:
             if btn.contains(pos):
                 self._on_button_click(btn.text)
@@ -118,6 +163,8 @@ class Game:
         if state == GameState.MENU:
             if text == "Play":
                 self.state_manager.transition(GameState.MODE_SELECT)
+            elif text == "Leaderboard":
+                self.state_manager.transition(GameState.LEADERBOARD)
             elif text == "Quit":
                 self.running = False
 
@@ -154,10 +201,38 @@ class Game:
                 self.state_manager.transition(GameState.MENU)
 
         elif state == GameState.COMPLETED:
-            if text == "Play Again":
+            if text == "Skip & Play Again":
+                self._reset_completion_state()
                 self.state_manager.transition(GameState.MODE_SELECT)
             elif text == "Menu":
+                self._reset_completion_state()
                 self.state_manager.transition(GameState.MENU)
+
+        elif state == GameState.LEADERBOARD:
+            if text == "Back":
+                if self.state_manager.previous_state == GameState.PLAYING:
+                    self.state_manager.transition(GameState.PLAYING)
+                else:
+                    self.state_manager.transition(GameState.MENU)
+
+    def _submit_score(self):
+        """Submit score to leaderboard."""
+        if self._player_name.strip() and self.mode_controller is not None and not self._score_saved:
+            save_entry(
+                name=self._player_name.strip(),
+                score=self.mode_controller.calculate_final_score(),
+                time_sec=self.mode_controller.elapsed,
+                mode=self.state_manager.mode.value,
+                grid_size=self.state_manager.grid_size,
+            )
+            self._score_saved = True
+            self._name_input_active = False
+
+    def _reset_completion_state(self):
+        """Reset completion screen state for next game."""
+        self._player_name = ""
+        self._name_input_active = True
+        self._score_saved = False
 
     def _update(self):
         """Update game logic."""
@@ -208,6 +283,11 @@ class Game:
                 self.state_manager.transition(GameState.COMPLETED)
                 return
 
+        # Check fist reset
+        if self.hand_tracker.fist_reset_triggered:
+            self._restart_puzzle()
+            return
+
         # Handle grab/release with hand
         currently_grabbing = self.hand_tracker.is_grabbing
         cx, cy = self.hand_tracker.cursor_pos
@@ -221,11 +301,9 @@ class Game:
         elif not currently_grabbing and self._was_grabbing:
             # Released
             if self.board.held_piece is not None:
-                was_correct_before = self.board.held_piece.is_correct
                 self.board.release()
                 # Check if placement was correct
                 if self.mode_controller is not None:
-                    # Find the piece we just released (it's at end of list)
                     last_piece = self.board.pieces[-1]
                     self.mode_controller.on_piece_placed(last_piece.is_correct)
 
@@ -233,6 +311,7 @@ class Game:
 
         # Check completion
         if self.board.completed:
+            self._reset_completion_state()
             self.state_manager.transition(GameState.COMPLETED)
 
     def _start_capture_countdown(self):
@@ -281,12 +360,17 @@ class Game:
             self._render_paused()
         elif state == GameState.COMPLETED:
             self._render_completed()
+        elif state == GameState.LEADERBOARD:
+            self._render_leaderboard()
 
     def _render_menu(self):
         center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2
+        y_start = 300
+        gap = BUTTON_HEIGHT + BUTTON_MARGIN
         self._buttons = [
-            Button("Play", center_x, 320),
-            Button("Quit", center_x, 320 + BUTTON_HEIGHT + BUTTON_MARGIN),
+            Button("Play", center_x, y_start),
+            Button("Leaderboard", center_x, y_start + gap),
+            Button("Quit", center_x, y_start + 2 * gap),
         ]
         self.renderer.draw_menu(self.state_manager, self._buttons)
 
@@ -332,13 +416,11 @@ class Game:
 
         frame = self.camera_frame
         if frame is None:
-            # No camera — use sample image as preview
             frame = generate_sample_image()
 
         self.renderer.draw_capturing(frame, countdown)
 
         if not self.use_camera:
-            # Auto-start with sample image after brief delay
             if self._capture_countdown == 0:
                 self._captured_image = generate_sample_image()
                 self._capture_countdown = 2
@@ -375,13 +457,23 @@ class Game:
     def _render_completed(self):
         center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2
         self._buttons = [
-            Button("Play Again", center_x, 530),
-            Button("Menu", center_x, 530 + BUTTON_HEIGHT + BUTTON_MARGIN),
+            Button("Skip & Play Again", center_x, 460),
         ]
         if self.mode_controller is not None:
             self.renderer.draw_completed(
-                self.board, self.mode_controller, self._buttons
+                self.board,
+                self.mode_controller,
+                self._buttons,
+                self._player_name,
+                self._name_input_active,
             )
+
+    def _render_leaderboard(self):
+        center_x = WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2
+        self._buttons = [
+            Button("Back", center_x, WINDOW_HEIGHT - 80),
+        ]
+        self.renderer.draw_leaderboard(self._buttons)
 
     def _cleanup(self):
         """Release resources."""

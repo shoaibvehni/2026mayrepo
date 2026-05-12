@@ -7,6 +7,7 @@ import mediapipe as mp
 import numpy as np
 
 from src.config import (
+    FIST_HOLD_FRAMES,
     GESTURE_FIST,
     GESTURE_NONE,
     GESTURE_OPEN,
@@ -20,6 +21,16 @@ from src.config import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
+
+# MediaPipe hand connections for skeleton drawing
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),       # thumb
+    (0, 5), (5, 6), (6, 7), (7, 8),       # index
+    (0, 9), (9, 10), (10, 11), (11, 12),   # middle
+    (0, 13), (13, 14), (14, 15), (15, 16), # ring
+    (0, 17), (17, 18), (18, 19), (19, 20), # pinky
+    (5, 9), (9, 13), (13, 17),             # palm
+]
 
 
 class HandTracker:
@@ -42,13 +53,18 @@ class HandTracker:
         # Gesture state tracking
         self._pinch_frames = 0
         self._release_frames = 0
+        self._fist_frames = 0
         self._is_grabbing = False
+        self._fist_reset_triggered = False
         self._gesture = GESTURE_NONE
         self._landmarks = None
         self._hand_detected = False
 
+        # Landmark pixel positions for skeleton drawing
+        self._landmark_pixels: list[tuple[int, int]] = []
+
         # Trail for visual feedback
-        self._trail = []
+        self._trail: list[tuple[int, int]] = []
         self._max_trail = 20
 
     @property
@@ -71,6 +87,16 @@ class HandTracker:
     def trail(self) -> list[tuple[int, int]]:
         return list(self._trail)
 
+    @property
+    def landmark_pixels(self) -> list[tuple[int, int]]:
+        return list(self._landmark_pixels)
+
+    @property
+    def fist_reset_triggered(self) -> bool:
+        triggered = self._fist_reset_triggered
+        self._fist_reset_triggered = False
+        return triggered
+
     def process_frame(self, frame: np.ndarray):
         """Process a camera frame and update gesture state."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -82,8 +108,10 @@ class HandTracker:
             self._landmarks = hand.landmark
 
             self._update_cursor(hand)
+            self._update_landmark_pixels(hand)
             self._detect_gesture(hand)
             self._update_grab_state()
+            self._update_fist_state()
 
             self._trail.append((self._cursor_x, self._cursor_y))
             if len(self._trail) > self._max_trail:
@@ -91,10 +119,12 @@ class HandTracker:
         else:
             self._hand_detected = False
             self._landmarks = None
+            self._landmark_pixels = []
             self._gesture = GESTURE_NONE
             self._release_frames += 1
             if self._release_frames > RELEASE_HOLD_FRAMES:
                 self._is_grabbing = False
+            self._fist_frames = 0
             self._trail.clear()
 
     def _update_cursor(self, hand):
@@ -112,6 +142,14 @@ class HandTracker:
         self._cursor_y = int(
             self._cursor_y * HAND_SMOOTHING + raw_y * (1 - HAND_SMOOTHING)
         )
+
+    def _update_landmark_pixels(self, hand):
+        """Convert normalized landmarks to pixel coordinates for drawing."""
+        self._landmark_pixels = []
+        for lm in hand.landmark:
+            px = int((1.0 - lm.x) * WINDOW_WIDTH)
+            py = int(lm.y * WINDOW_HEIGHT)
+            self._landmark_pixels.append((px, py))
 
     def _detect_gesture(self, hand):
         """Classify current hand gesture."""
@@ -171,6 +209,16 @@ class HandTracker:
             self._release_frames += 1
             if self._release_frames >= RELEASE_HOLD_FRAMES:
                 self._is_grabbing = False
+
+    def _update_fist_state(self):
+        """Track fist hold for reset trigger."""
+        if self._gesture == GESTURE_FIST:
+            self._fist_frames += 1
+            if self._fist_frames >= FIST_HOLD_FRAMES:
+                self._fist_reset_triggered = True
+                self._fist_frames = 0
+        else:
+            self._fist_frames = 0
 
     @staticmethod
     def _distance(p1, p2) -> float:
