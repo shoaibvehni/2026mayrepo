@@ -11,6 +11,7 @@ class GameState(Enum):
     PLAYING = auto()
     PAUSED = auto()
     COMPLETED = auto()
+    LEADERBOARD = auto()
 
 
 class GameMode(Enum):
@@ -26,7 +27,7 @@ class StateManager:
         self.state = GameState.MENU
         self.mode = GameMode.CLASSIC
         self.grid_size = 3
-        self.previous_state = None
+        self.previous_state: GameState | None = None
 
     def transition(self, new_state: GameState):
         self.previous_state = self.state

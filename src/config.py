@@ -15,6 +15,7 @@ PINCH_THRESHOLD = 40  # pixels distance for pinch detection
 GRAB_HOLD_FRAMES = 3  # frames to confirm grab
 RELEASE_HOLD_FRAMES = 2  # frames to confirm release
 HAND_SMOOTHING = 0.6  # interpolation factor for smooth hand movement
+FIST_HOLD_FRAMES = 15  # frames to confirm fist-reset
 
 # Puzzle mechanics
 SNAP_THRESHOLD = 0.4  # fraction of piece size for snap distance
@@ -37,6 +38,10 @@ COLOR_CHAOS = (255, 60, 60)
 COLOR_TIMER = (255, 200, 50)
 COLOR_OVERLAY = (0, 0, 0, 180)
 COLOR_HAND_TRAIL = (0, 255, 180, 100)
+COLOR_PANEL_BG = (30, 30, 50, 200)
+COLOR_GOLD = (255, 215, 0)
+COLOR_SKELETON = (255, 255, 255)
+COLOR_LANDMARK = (0, 255, 180)
 
 # UI
 MENU_FONT_SIZE = 48
@@ -45,6 +50,8 @@ TITLE_FONT_SIZE = 72
 BUTTON_WIDTH = 300
 BUTTON_HEIGHT = 60
 BUTTON_MARGIN = 20
+PHASE_PANEL_WIDTH = 260
+PHASE_PANEL_HEIGHT = 120
 
 # Gesture labels
 GESTURE_OPEN = "open"
@@ -53,3 +60,7 @@ GESTURE_FIST = "fist"
 GESTURE_POINT = "point"
 GESTURE_PEACE = "peace"
 GESTURE_NONE = "none"
+
+# Leaderboard
+LEADERBOARD_FILE = "leaderboard.json"
+MAX_LEADERBOARD_ENTRIES = 10
