@@ -1,5 +1,6 @@
 """PyGame rendering engine for the puzzle game."""
 
+import math
 import random
 
 import cv2
@@ -8,7 +9,6 @@ import pygame
 
 from src.config import (
     BUTTON_HEIGHT,
-    BUTTON_MARGIN,
     BUTTON_WIDTH,
     COLOR_ACCENT,
     COLOR_BG,
@@ -22,20 +22,26 @@ from src.config import (
     COLOR_SKELETON,
     COLOR_TEXT,
     COLOR_TIMER,
-
+    CREDIT_FONT_SIZE,
+    CREDIT_TEXT,
+    DRAWING_TOOLBAR_HEIGHT,
+    DRAWING_TOOLBAR_Y,
     FPS,
     HUD_FONT_SIZE,
+    MATRIX_COLUMNS,
+    MATRIX_RAIN_SPEED,
     MENU_FONT_SIZE,
     PHASE_PANEL_WIDTH,
     TITLE_FONT_SIZE,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
+from src.drawing import DRAW_COLORS, DrawingCanvas
 from src.game_modes import ModeController
 from src.gesture import HAND_CONNECTIONS, HandTracker
 from src.leaderboard import load_leaderboard
 from src.puzzle import PuzzleBoard
-from src.state import GameMode, GameState, StateManager
+from src.state import GameMode, StateManager
 
 
 class Button:
@@ -65,7 +71,7 @@ class Renderer:
 
     def __init__(self):
         pygame.init()
-        pygame.display.set_caption("LIVE PUZZLE")
+        pygame.display.set_caption("LIVE PUZZLE - Hand Gesture Game")
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
 
@@ -76,6 +82,7 @@ class Renderer:
         self.small_font = pygame.font.SysFont("Arial", 20)
         self.phase_font = pygame.font.SysFont("Arial", 16)
         self.timer_font = pygame.font.SysFont("Arial", 32, bold=True)
+        self.credit_font = pygame.font.SysFont("Arial", CREDIT_FONT_SIZE)
 
         # Camera feed surface
         self.camera_surface = None
@@ -83,15 +90,48 @@ class Renderer:
         # Particle effects
         self._particles: list[dict] = []
 
+        # Matrix rain effect columns
+        self._matrix_drops: list[int] = [
+            random.randint(-WINDOW_HEIGHT, 0) for _ in range(MATRIX_COLUMNS)
+        ]
+        self._matrix_chars: list[str] = [
+            chr(random.randint(0x30A0, 0x30FF)) for _ in range(MATRIX_COLUMNS)
+        ]
+
+        # Scanline animation offset
+        self._scanline_offset = 0
+
+        # Frame counter for animations
+        self._frame_count = 0
+
     def clear(self):
         self.screen.fill(COLOR_BG)
 
     def draw_menu(self, state_manager: StateManager, buttons: list[Button]):
-        """Draw main menu."""
+        """Draw main menu with matrix rain background."""
         self.clear()
+        self._frame_count += 1
 
-        # Title
-        title = self.title_font.render("LIVE PUZZLE", True, COLOR_HIGHLIGHT)
+        # Matrix rain background effect
+        self._draw_matrix_rain()
+
+        # Scanline overlay
+        self._draw_scanlines()
+
+        # Dark panel behind title area
+        panel = pygame.Surface((600, 120), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 160))
+        self.screen.blit(panel, (WINDOW_WIDTH // 2 - 300, 100))
+
+        # Glowing title with shadow
+        glow_color = (
+            int(127 + 127 * math.sin(self._frame_count * 0.05)),
+            255,
+            int(180 + 75 * math.sin(self._frame_count * 0.03)),
+        )
+        title_shadow = self.title_font.render("LIVE PUZZLE", True, (0, 80, 60))
+        self.screen.blit(title_shadow, title_shadow.get_rect(center=(WINDOW_WIDTH // 2 + 3, 153)))
+        title = self.title_font.render("LIVE PUZZLE", True, glow_color)
         title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 150))
         self.screen.blit(title, title_rect)
 
@@ -99,25 +139,30 @@ class Renderer:
         sub = self.hud_font.render(
             "Solve puzzles with your hands in the air", True, COLOR_ACCENT
         )
-        sub_rect = sub.get_rect(center=(WINDOW_WIDTH // 2, 220))
+        sub_rect = sub.get_rect(center=(WINDOW_WIDTH // 2, 200))
         self.screen.blit(sub, sub_rect)
 
         # Buttons
         for btn in buttons:
             btn.draw(self.screen, self.menu_font)
 
-        # Footer
+        # Footer instructions
         footer = self.small_font.render(
-            "Show your hand to the camera to control | Pinch to grab | Open hand to release",
+            "Pinch to grab | Open hand to release | Fist to reset",
             True,
             COLOR_GRID,
         )
-        footer_rect = footer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 40))
+        footer_rect = footer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 55))
         self.screen.blit(footer, footer_rect)
+
+        # Credit
+        self._draw_credit()
 
     def draw_mode_select(self, buttons: list[Button]):
         """Draw mode selection screen."""
         self.clear()
+        self._draw_matrix_rain()
+        self._draw_scanlines()
 
         title = self.menu_font.render("Select Game Mode", True, COLOR_TEXT)
         title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 100))
@@ -125,6 +170,8 @@ class Renderer:
 
         for btn in buttons:
             btn.draw(self.screen, self.hud_font)
+
+        self._draw_credit()
 
     def draw_grid_select(self, current_size: int, buttons: list[Button]):
         """Draw grid size selection screen."""
@@ -148,6 +195,8 @@ class Renderer:
 
         for btn in buttons:
             btn.draw(self.screen, self.hud_font)
+
+        self._draw_credit()
 
     def draw_capturing(self, frame: np.ndarray, countdown: int):
         """Draw camera capture screen with full-screen camera."""
@@ -561,10 +610,11 @@ class Renderer:
         self.screen.blit(label, label_rect)
 
     def _draw_chaos_warning(self, countdown: float):
-        """Draw chaos mode warning."""
-        alpha = int(abs(np.sin(countdown * 3)) * 200)
+        """Draw chaos mode warning with pulsing effect."""
+        pulse = int(abs(np.sin(countdown * 3)) * 200)
+        r = min(255, COLOR_CHAOS[0] + pulse // 4)
         warning_text = self.menu_font.render(
-            f"CHAOS IN {countdown:.1f}s!", True, COLOR_CHAOS
+            f"CHAOS IN {countdown:.1f}s!", True, (r, COLOR_CHAOS[1], COLOR_CHAOS[2])
         )
         warning_rect = warning_text.get_rect(
             center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 60)
@@ -606,6 +656,133 @@ class Renderer:
                 alive.append(p)
         self._particles = alive
 
+    def draw_drawing_mode(
+        self,
+        canvas: DrawingCanvas,
+        hand: HandTracker,
+        camera_frame: np.ndarray | None,
+        buttons: list[Button],
+    ):
+        """Draw the freehand drawing mode screen."""
+        # Camera background
+        if camera_frame is not None:
+            bg_surface = self._frame_to_surface(camera_frame, WINDOW_WIDTH, WINDOW_HEIGHT)
+            self.screen.blit(bg_surface, (0, 0))
+            overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 100))
+            self.screen.blit(overlay, (0, 0))
+        else:
+            self.clear()
+
+        # Draw the canvas
+        self.screen.blit(canvas.get_surface(), (0, 0))
+
+        # Title
+        title = self.hud_font.render("DRAWING MODE", True, COLOR_HIGHLIGHT)
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 20))
+        self.screen.blit(title, title_rect)
+
+        # Toolbar background
+        toolbar_bg = pygame.Surface((WINDOW_WIDTH, DRAWING_TOOLBAR_HEIGHT + 10), pygame.SRCALPHA)
+        toolbar_bg.fill((15, 15, 30, 220))
+        self.screen.blit(toolbar_bg, (0, DRAWING_TOOLBAR_Y - 5))
+
+        # Color swatches
+        swatch_size = 28
+        start_x = 20
+        for i, (name, color) in enumerate(DRAW_COLORS):
+            sx = start_x + i * (swatch_size + 6)
+            sy = DRAWING_TOOLBAR_Y + 16
+            pygame.draw.rect(
+                self.screen, color,
+                (sx, sy, swatch_size, swatch_size),
+                border_radius=4,
+            )
+            if i == canvas.color_index and not canvas.is_erasing:
+                pygame.draw.rect(
+                    self.screen, COLOR_TEXT,
+                    (sx - 2, sy - 2, swatch_size + 4, swatch_size + 4),
+                    2, border_radius=6,
+                )
+
+        # Brush size indicator
+        bs_x = start_x + len(DRAW_COLORS) * (swatch_size + 6) + 20
+        bs_label = self.phase_font.render(f"Brush: {canvas.brush_size}px", True, COLOR_TEXT)
+        self.screen.blit(bs_label, (bs_x, DRAWING_TOOLBAR_Y + 8))
+
+        # Eraser indicator
+        if canvas.is_erasing:
+            er_label = self.phase_font.render("ERASER ON", True, (255, 100, 100))
+            self.screen.blit(er_label, (bs_x, DRAWING_TOOLBAR_Y + 32))
+        else:
+            color_label = self.phase_font.render(
+                canvas.current_color_name, True, canvas.current_color
+            )
+            self.screen.blit(color_label, (bs_x, DRAWING_TOOLBAR_Y + 32))
+
+        # Instructions panel
+        self._draw_phase_panel("DRAWING MODE", [
+            "Point finger = Draw",
+            "Pinch = Change color",
+            "Peace = Brush size",
+            "Fist = Clear canvas",
+            "ESC = Back to menu",
+        ])
+
+        # Hand skeleton & cursor
+        if hand.hand_detected:
+            self._draw_hand_skeleton(hand)
+            self._draw_hand_cursor(hand)
+
+        # Buttons
+        for btn in buttons:
+            btn.draw(self.screen, self.hud_font)
+
+        # Credit
+        self._draw_credit()
+
+    def _draw_credit(self):
+        """Draw 'Developed by Shoaib' credit at the bottom."""
+        credit = self.credit_font.render(CREDIT_TEXT, True, (120, 120, 140))
+        credit_rect = credit.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 14))
+        self.screen.blit(credit, credit_rect)
+
+    def _draw_matrix_rain(self):
+        """Draw Matrix-style falling characters background."""
+        col_width = WINDOW_WIDTH // MATRIX_COLUMNS
+        matrix_font = self.phase_font
+
+        for i in range(MATRIX_COLUMNS):
+            self._matrix_drops[i] += MATRIX_RAIN_SPEED
+            if self._matrix_drops[i] > WINDOW_HEIGHT:
+                self._matrix_drops[i] = random.randint(-100, 0)
+                self._matrix_chars[i] = chr(random.randint(0x30A0, 0x30FF))
+
+            y = self._matrix_drops[i]
+            if 0 <= y <= WINDOW_HEIGHT:
+                brightness = max(40, 255 - int((y / WINDOW_HEIGHT) * 200))
+                color = (0, brightness, int(brightness * 0.4))
+                char_surf = matrix_font.render(self._matrix_chars[i], True, color)
+                self.screen.blit(char_surf, (i * col_width, y))
+
+                # Trailing characters
+                for j in range(1, 6):
+                    trail_y = y - j * 18
+                    if trail_y > 0:
+                        trail_brightness = max(10, brightness - j * 40)
+                        trail_color = (0, trail_brightness, int(trail_brightness * 0.3))
+                        trail_char = chr(random.randint(0x30A0, 0x30FF))
+                        trail_surf = matrix_font.render(trail_char, True, trail_color)
+                        self.screen.blit(trail_surf, (i * col_width, trail_y))
+
+    def _draw_scanlines(self):
+        """Draw CRT scanline effect overlay."""
+        self._scanline_offset = (self._scanline_offset + 1) % 4
+        scanline_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        for y in range(self._scanline_offset, WINDOW_HEIGHT, 4):
+            pygame.draw.line(scanline_surface, (0, 0, 0, 30), (0, y), (WINDOW_WIDTH, y))
+        self.screen.blit(scanline_surface, (0, 0))
+
     @staticmethod
     def _frame_to_surface(
         frame: np.ndarray, width: int, height: int
@@ -613,7 +790,6 @@ class Renderer:
         """Convert OpenCV BGR frame to PyGame surface."""
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_resized = cv2.resize(frame_rgb, (width, height))
-        # Rotate for pygame
         frame_rotated = np.rot90(frame_resized)
         frame_flipped = np.flipud(frame_rotated)
         return pygame.surfarray.make_surface(frame_flipped)

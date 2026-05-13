@@ -12,6 +12,7 @@ class GameState(Enum):
     PAUSED = auto()
     COMPLETED = auto()
     LEADERBOARD = auto()
+    DRAWING = auto()
 
 
 class GameMode(Enum):
