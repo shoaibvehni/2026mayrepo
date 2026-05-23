@@ -2,6 +2,7 @@
 
 import math
 import os
+import sys
 import time
 
 import cv2
@@ -51,11 +52,12 @@ _RING_FINGER_MCP = 13
 _PINKY_TIP = 20
 _PINKY_MCP = 17
 
-# Model file path (next to project root)
-_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "hand_landmarker.task",
-)
+# Model file path (next to project root, or inside PyInstaller bundle)
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = sys._MEIPASS
+else:
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MODEL_PATH = os.path.join(_BASE_DIR, "hand_landmarker.task")
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
     "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
